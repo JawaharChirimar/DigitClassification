@@ -18,9 +18,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 from ultralytics import YOLO
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+from DigitClassifier import load_or_create_digit_classifier, classify_digit
 
 
 def create_output_directory():
@@ -196,132 +194,24 @@ def extract_and_process_region(image, box, target_size=(28, 28)):
     else:
         region_gray = region
     
-    # Resize to 28x28
+    # Resize to 28x28 first (preserves shape better than thresholding before resize)
     region_resized = cv2.resize(region_gray, target_size, interpolation=cv2.INTER_AREA)
     
+    # Normalize to improve contrast without destroying shape
+    # Use adaptive normalization to match MNIST's clean appearance
+    # Invert if needed to ensure dark digits on light background
+    mean_val = np.mean(region_resized)
+    if mean_val < 127:  # If image is mostly dark, invert it
+        region_resized = 255 - region_resized
+    
+    # Optional: Light contrast enhancement (without thresholding to preserve shape)
+    # Normalize to full range to maximize contrast
+    min_val = np.min(region_resized)
+    max_val = np.max(region_resized)
+    if max_val > min_val:
+        region_resized = ((region_resized - min_val) / (max_val - min_val) * 255).astype(np.uint8)
+    
     return region_resized
-
-
-def create_digit_classifier_model():
-    """
-    Create a CNN model for digit classification (0-9).
-    Architecture similar to MNIST classifiers.
-    
-    Returns:
-        Compiled Keras model
-    """
-    model = keras.Sequential([
-        layers.Input(shape=(28, 28, 1)),
-        layers.Conv2D(32, (3, 3), activation='relu'),
-        layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(64, (3, 3), activation='relu'),
-        layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(64, (3, 3), activation='relu'),
-        layers.Flatten(),
-        layers.Dense(64, activation='relu'),
-        layers.Dropout(0.5),
-        layers.Dense(10, activation='softmax')  # 10 classes for digits 0-9
-    ])
-    
-    model.compile(
-        optimizer='adam',
-        loss='sparse_categorical_crossentropy',
-        metrics=['accuracy']
-    )
-    
-    return model
-
-
-def load_or_create_digit_classifier(classifier_model_path=None):
-    """
-    Load a pre-trained digit classifier or create/train a new one.
-    
-    Args:
-        classifier_model_path: Path to saved classifier model (.h5 file)
-    
-    Returns:
-        Trained Keras model for digit classification
-    """
-    # Determine the model path to use
-    default_path = Path.home() / ".digit_classifier_mnist.h5"
-    model_path_to_use = classifier_model_path if classifier_model_path else str(default_path)
-    
-    # Try to load existing model (either specified path or default location)
-    if os.path.exists(model_path_to_use):
-        try:
-            print(f"Loading digit classifier from: {model_path_to_use}")
-            model = keras.models.load_model(model_path_to_use)
-            print("Digit classifier loaded successfully")
-            return model
-        except Exception as e:
-            print(f"Warning: Could not load classifier from {model_path_to_use}: {e}")
-            print("Creating new classifier model...")
-    
-    # Create new model
-    print("Creating new digit classifier model...")
-    model = create_digit_classifier_model()
-    
-    # Try to train on MNIST dataset
-    try:
-        print("Training classifier on MNIST dataset (this may take a few minutes)...")
-        (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
-        
-        # Normalize pixel values to [0, 1]
-        x_train = x_train.astype('float32') / 255.0
-        x_test = x_test.astype('float32') / 255.0
-        
-        # Reshape for CNN (28, 28, 1)
-        x_train = x_train.reshape(x_train.shape[0], 28, 28, 1)
-        x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
-        
-        # Train the model
-        model.fit(x_train, y_train, 
-                 epochs=5, 
-                 batch_size=128, 
-                 validation_data=(x_test, y_test),
-                 verbose=1)
-        
-        # Save the trained model
-        model.save(model_path_to_use)
-        print(f"Trained model saved to: {model_path_to_use}")
-        
-        print("Digit classifier trained and ready!")
-        return model
-        
-    except Exception as e:
-        print(f"Warning: Could not train on MNIST dataset: {e}")
-        print("Using untrained model (predictions will be random)")
-        return model
-
-
-def classify_digit(classifier_model, digit_image):
-    """
-    Classify a single digit image using the CNN model.
-    
-    Args:
-        classifier_model: Trained Keras model
-        digit_image: 28x28 greyscale image (numpy array)
-    
-    Returns:
-        Predicted digit (0-9) and confidence score
-    """
-    # Ensure image is the right shape and type
-    if digit_image.shape != (28, 28):
-        # Resize if needed
-        digit_image = cv2.resize(digit_image, (28, 28))
-    
-    # Normalize pixel values to [0, 1]
-    digit_normalized = digit_image.astype('float32') / 255.0
-    
-    # Reshape for model input: (1, 28, 28, 1)
-    digit_input = digit_normalized.reshape(1, 28, 28, 1)
-    
-    # Predict
-    predictions = classifier_model.predict(digit_input, verbose=0)
-    predicted_digit = np.argmax(predictions[0])
-    confidence = float(predictions[0][predicted_digit])
-    
-    return predicted_digit, confidence
 
 
 def process_image(input_path, model_path=None, output_dir=None, classifier_model_path=None, classify_digits=False):
