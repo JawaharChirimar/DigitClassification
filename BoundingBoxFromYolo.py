@@ -194,24 +194,42 @@ def extract_and_process_region(image, box, target_size=(28, 28)):
     else:
         region_gray = region
     
-    # Resize to 28x28 first (preserves shape better than thresholding before resize)
-    region_resized = cv2.resize(region_gray, target_size, interpolation=cv2.INTER_AREA)
+    # Resize to 20x20 first (digit will be in center)
+    digit_size = (20, 20)
+    region_resized = cv2.resize(region_gray, digit_size, interpolation=cv2.INTER_AREA)
     
-    # Normalize to improve contrast without destroying shape
-    # Use adaptive normalization to match MNIST's clean appearance
-    # Invert if needed to ensure dark digits on light background
-    mean_val = np.mean(region_resized)
-    if mean_val < 127:  # If image is mostly dark, invert it
-        region_resized = 255 - region_resized
+    # Light noise reduction - very gentle blur to smooth without losing detail
+    region_cleaned = cv2.bilateralFilter(region_resized, 5, 50, 50)
     
-    # Optional: Light contrast enhancement (without thresholding to preserve shape)
-    # Normalize to full range to maximize contrast
-    min_val = np.min(region_resized)
-    max_val = np.max(region_resized)
-    if max_val > min_val:
-        region_resized = ((region_resized - min_val) / (max_val - min_val) * 255).astype(np.uint8)
+    # Apply adaptive thresholding for better contrast (less aggressive than Otsu's binary)
+    # This preserves more detail while still cleaning the background
+    region_binary = cv2.adaptiveThreshold(region_cleaned, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                         cv2.THRESH_BINARY, 11, 2)
     
-    return region_resized
+    # Very light noise removal - only remove tiny isolated pixels
+    kernel = np.ones((1, 1), np.uint8)  # Minimal kernel
+    region_cleaned = cv2.morphologyEx(region_binary, cv2.MORPH_OPEN, kernel, iterations=1)
+    
+    # Ensure white digits on black background
+    # Check if we need to invert (if background is mostly white, invert to get white digits on black)
+    mean_val = np.mean(region_cleaned)
+    if mean_val > 127:  # If image is mostly white (light background), invert it
+        region_cleaned = 255 - region_cleaned
+    
+    # Add 4 pixels of solid black padding on all 4 sides to make 28x28
+    # Final size: 20 + 4 + 4 = 28
+    padding = 4
+    region_padded = cv2.copyMakeBorder(
+        region_cleaned,
+        top=padding,
+        bottom=padding,
+        left=padding,
+        right=padding,
+        borderType=cv2.BORDER_CONSTANT,
+        value=0  # Black padding
+    )
+    
+    return region_padded
 
 
 def process_image(input_path, model_path=None, output_dir=None, classifier_model_path=None, classify_digits=False):
