@@ -24,34 +24,67 @@ except ImportError:
     print("Warning: 'emnist' package not available. Install with: pip install emnist")
 
 
-def create_digit_classifier_model():
+def create_digit_classifier_model(use_emnist=True, use_deep_model=True):
     """
     Create a CNN model for digit classification (0-9).
     Architecture similar to MNIST classifiers.
     
+    Args:
+        use_emnist: Whether EMNIST data will be used (affects model capacity)
+        use_deep_model: Whether to use deep model architecture (default: True)
+    
     Returns:
         Compiled Keras model
     """
-    model = keras.Sequential([
-        layers.Input(shape=(28, 28, 1)),
-        layers.Conv2D(64, (3, 3), activation='elu'),
-        layers.BatchNormalization(),
-        layers.Conv2D(64, (3, 3), activation='elu'),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D((2, 2)),
-        layers.Dropout(0.25),
-        layers.Conv2D(128, (3, 3), activation='elu'),
-        layers.BatchNormalization(),
-        layers.Conv2D(128, (3, 3), activation='elu'),
-        layers.BatchNormalization(),
-        layers.MaxPooling2D((2, 2)),
-        layers.Dropout(0.25),
-        layers.Flatten(),
-        layers.Dense(256, activation='elu'),
-        layers.BatchNormalization(),
-        layers.Dropout(0.5),
-        layers.Dense(10, activation='softmax')  # 10 classes for digits 0-9
-    ])
+    # Adjust model capacity based on dataset size
+    if use_emnist:
+        # Larger model for MNIST + EMNIST (more training data)
+        conv4 = 64
+        dense1 = 128
+    else:
+        # Smaller model for MNIST only
+        conv4 = 32
+        dense1 = 32
+        
+    if use_deep_model:
+        model = keras.Sequential([
+            layers.Input(shape=(28, 28, 1)),
+            layers.Conv2D(conv4, (3, 3), activation='elu'),
+            layers.BatchNormalization(),
+            layers.Conv2D(conv4, (3, 3), activation='elu'),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D((2, 2)),
+            layers.Dropout(0.25),
+            layers.Conv2D(conv4, (3, 3), activation='elu'),
+            layers.BatchNormalization(),
+            layers.Conv2D(conv4, (3, 3), activation='elu'),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D((2, 2)),
+            layers.Dropout(0.25),
+            layers.Flatten(),
+            layers.Dense(dense1, activation='elu'),
+            layers.BatchNormalization(),
+            layers.Dropout(0.5),
+            layers.Dense(10, activation='softmax')  # 10 classes for digits 0-9
+        ])
+    else:
+        # Shallow model architecture (fewer layers)
+        model = keras.Sequential([
+            layers.Input(shape=(28, 28, 1)),
+            layers.Conv2D(conv4, (3, 3), activation='elu'),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D((2, 2)),
+            layers.Dropout(0.25),
+            layers.Conv2D(conv4, (3, 3), activation='elu'),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D((2, 2)),
+            layers.Dropout(0.25),
+            layers.Flatten(),
+            layers.Dense(dense1, activation='elu'),
+            layers.BatchNormalization(),
+            layers.Dropout(0.5),
+            layers.Dense(10, activation='softmax')  # 10 classes for digits 0-9
+        ])
     
     model.compile(
         optimizer='adam',
@@ -196,34 +229,27 @@ class ImageDataGeneratorWithAugmentation:
                 yield batch_x_aug, batch_y
 
 
-def load_or_create_digit_classifier(classifier_model_path=None):
+def load_or_create_digit_classifier(classifier_model_path=None, use_augmentation=True, use_mnist=True, use_emnist=True, num_epochs=20, use_deep_model=True):
     """
     Load a pre-trained digit classifier or create/train a new one.
     
     Args:
-        classifier_model_path: Path to saved classifier model (.h5 file)
+        classifier_model_path: Path to saved classifier model (.keras file)
+        use_augmentation: Whether to use data augmentation during training (default: True)
+        use_mnist: Whether to include MNIST data for training/validation (default: True)
+        use_emnist: Whether to include EMNIST Digits data for training/validation (default: True)
+        num_epochs: Number of training epochs (default: 20)
+        use_deep_model: Whether to use deep model architecture (default: True)
     
     Returns:
         Trained Keras model for digit classification
     """
-    # Create timestamped directory for model checkpoints
-    base_dir = Path.home() / "data" / "modelForBBFY"
-    base_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create timestamped run directory: run_YYYY_MM_DD_HH_MM_SS
-    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    run_dir = base_dir / f"run_{timestamp}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    
     # Determine the model path to use
     if classifier_model_path:
-        # If user specified a path, use it (but still save epoch models to run_dir)
         model_path_to_use = classifier_model_path
     else:
-        # Default: save to the timestamped run directory
-        model_path_to_use = str(run_dir / "digit_classifier_mnist.h5")
-    
-    print(f"Model checkpoints will be saved to: {run_dir}")
+        # Default: save to home directory
+        model_path_to_use = str(Path.home() / ".digit_classifier_mnist.keras")
     
     # Try to load existing model (either specified path or default location)
     if os.path.exists(model_path_to_use):
@@ -236,22 +262,44 @@ def load_or_create_digit_classifier(classifier_model_path=None):
             print(f"Warning: Could not load classifier from {model_path_to_use}: {e}")
             print("Creating new classifier model...")
     
+    # We're going to train a new model, so create the run directory now
+    # Create timestamped directory for model checkpoints
+    base_dir = Path.home() / "data" / "modelForBBFY"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create timestamped run directory: run_YYYY_MM_DD_HH_MM_SS
+    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    run_dir = base_dir / f"run_{timestamp}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"Model checkpoints will be saved to: {run_dir}")
+    
     # Create new model
     print("Creating new digit classifier model...")
-    model = create_digit_classifier_model()
+    model = create_digit_classifier_model(use_emnist=use_emnist, use_deep_model=use_deep_model)
     
     # Try to train on MNIST + EMNIST Digits dataset
     try:
-        print("Loading MNIST dataset...")
-        (x_train_mnist, y_train_mnist), (x_test_mnist, y_test_mnist) = keras.datasets.mnist.load_data()
+        # Load MNIST if requested
+        x_train_mnist = None
+        y_train_mnist = None
+        x_test_mnist = None
+        y_test_mnist = None
         
-        # Load EMNIST Digits if available
+        if use_mnist:
+            print("Loading MNIST dataset...")
+            (x_train_mnist, y_train_mnist), (x_test_mnist, y_test_mnist) = keras.datasets.mnist.load_data()
+            print(f"Loaded MNIST: {len(x_train_mnist)} training, {len(x_test_mnist)} test samples")
+        else:
+            print("Skipping MNIST dataset (use_mnist=False)")
+        
+        # Load EMNIST Digits if requested and available
         x_train_emnist = None
         y_train_emnist = None
         x_test_emnist = None
         y_test_emnist = None
         
-        if EMNIST_AVAILABLE:
+        if use_emnist and EMNIST_AVAILABLE:
             x_train_emnist = None
             max_retries = 2
             for attempt in range(max_retries):
@@ -296,23 +344,48 @@ def load_or_create_digit_classifier(classifier_model_path=None):
                             traceback.print_exc()
                         x_train_emnist = None
                         break  # Give up after showing error
+        elif use_emnist and not EMNIST_AVAILABLE:
+            print("Skipping EMNIST dataset (EMNIST package not available. Install with: pip install emnist)")
+        elif not use_emnist:
+            print("Skipping EMNIST dataset (use_emnist=False)")
         
-        # Combine datasets
+        # Combine datasets based on what's available
+        datasets_to_combine = []
+        dataset_names = []
+        
+        if x_train_mnist is not None:
+            datasets_to_combine.append((x_train_mnist, y_train_mnist, x_test_mnist, y_test_mnist))
+            dataset_names.append(f"MNIST ({len(x_train_mnist)} samples)")
+        
         if x_train_emnist is not None:
-            print(f"Combining datasets: MNIST ({len(x_train_mnist)} samples) + EMNIST Digits ({len(x_train_emnist)} samples)")
-            x_train = np.concatenate([x_train_mnist, x_train_emnist], axis=0)
-            y_train = np.concatenate([y_train_mnist, y_train_emnist], axis=0)
-            x_test = np.concatenate([x_test_mnist, x_test_emnist], axis=0)
-            y_test = np.concatenate([y_test_mnist, y_test_emnist], axis=0)
-            print(f"Combined dataset: {len(x_train)} training, {len(x_test)} test samples")
+            datasets_to_combine.append((x_train_emnist, y_train_emnist, x_test_emnist, y_test_emnist))
+            dataset_names.append(f"EMNIST Digits ({len(x_train_emnist)} samples)")
+        
+        # Check if we have at least one dataset
+        if len(datasets_to_combine) == 0:
+            error_msg = "No training data available! "
+            if not use_mnist and not use_emnist:
+                error_msg += "Both MNIST and EMNIST are disabled."
+            elif not use_mnist:
+                error_msg += "MNIST is disabled (use_mnist=False) and EMNIST is not available or failed to load."
+            elif not use_emnist:
+                error_msg += "EMNIST is disabled (use_emnist=False) and MNIST failed to load."
+            else:
+                error_msg += "Both datasets failed to load."
+            raise ValueError(error_msg)
+        
+        # Combine all available datasets
+        if len(datasets_to_combine) == 1:
+            x_train, y_train, x_test, y_test = datasets_to_combine[0]
+            print(f"Using {dataset_names[0]}: {len(x_train)} training, {len(x_test)} test samples")
         else:
-            if not EMNIST_AVAILABLE:
-                print(f"Warning: EMNIST package not available. Install with: pip install emnist")
-            print(f"Using MNIST only: {len(x_train_mnist)} training, {len(x_test_mnist)} test samples")
-            x_train = x_train_mnist
-            y_train = y_train_mnist
-            x_test = x_test_mnist
-            y_test = y_test_mnist
+            # Combine multiple datasets
+            print(f"Combining datasets: {' + '.join(dataset_names)}")
+            x_train = np.concatenate([ds[0] for ds in datasets_to_combine], axis=0)
+            y_train = np.concatenate([ds[1] for ds in datasets_to_combine], axis=0)
+            x_test = np.concatenate([ds[2] for ds in datasets_to_combine], axis=0)
+            y_test = np.concatenate([ds[3] for ds in datasets_to_combine], axis=0)
+            print(f"Combined dataset: {len(x_train)} training, {len(x_test)} test samples")
         
         # Normalize pixel values to [0, 1]
         x_train = x_train.astype('float32') / 255.0
@@ -322,95 +395,133 @@ def load_or_create_digit_classifier(classifier_model_path=None):
         x_train = x_train.reshape(x_train.shape[0], 28, 28, 1)
         x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
         
-        # Create data augmentation pipeline
-        # This will be applied on-the-fly during training
-        print("Setting up data augmentation pipeline...")
-        augmentation_pipeline = create_augmentation_pipeline()
-        
-        # Create data generator with augmentation
-        train_datagen = ImageDataGeneratorWithAugmentation(
-            augmentation_pipeline=augmentation_pipeline,
-            batch_size=64
-        )
-        
-        # Train the model with augmented data
-        print("Starting training with data augmentation...")
-        print("\n" + "="*60)
-        print("Augmentation Configuration:")
-        print("="*60)
-        print("All augmentations can apply to the SAME image simultaneously")
-        print("(Based on their individual probabilities)")
-        print("\nAugmentation probabilities:")
-        print("  50% of samples will be augmented, 50% will remain original")
-        print("  Rotation OR Slant (mutually exclusive): 80% (p=0.8) of augmented samples")
-        print("    - Rotation: ±48° rotation (no shift, no scale)")
-        print("    - Slant: ±15° vertical shear (no shift, no scale)")
-        print("  GaussianBlur (image quality): 30% (p=0.3) of augmented samples")
-        print("  GaussNoise (image quality): 20% (p=0.2) of augmented samples")
-        print("  Morphology - Stroke thickness variation: 50% (p=0.5) of augmented samples")
-        print("\nNote: Augmentation is applied on-the-fly - each sample is augmented differently each epoch")
         print(f"Training samples per epoch: {len(x_train)}")
         print(f"Test samples: {len(x_test)}")
-        num_epochs = 30
-        print(f"Total augmented samples over {num_epochs} epochs: ~{len(x_train) * num_epochs}")
-        print("(Each sample is augmented uniquely each time it's seen)")
-        print("="*60 + "\n")
+        print(f"Number of epochs: {num_epochs}")
         
-        # Custom callback to print per-epoch statistics
-        class AugmentationStatsCallback(keras.callbacks.Callback):
-            def __init__(self, datagen, samples_per_epoch):
-                self.datagen = datagen
-                self.samples_per_epoch = samples_per_epoch
-                self.last_total = 0
+        # Setup training based on whether augmentation is enabled
+        if use_augmentation:
+            # Create data augmentation pipeline
+            # This will be applied on-the-fly during training
+            print("Setting up data augmentation pipeline...")
+            augmentation_pipeline = create_augmentation_pipeline()
             
-            def on_epoch_end(self, epoch, logs=None):
-                current_total = self.datagen.stats['total_samples']
-                samples_this_epoch = current_total - self.last_total
-                self.last_total = current_total
-                print(f"\n[Epoch {epoch+1}] Augmented samples processed: {samples_this_epoch}")
-        
-        stats_callback = AugmentationStatsCallback(train_datagen, len(x_train))
-        
-        # ModelCheckpoint callback to save model after each epoch with epoch number
-        # Save all epoch models in the timestamped run directory
-        checkpoint_callback = keras.callbacks.ModelCheckpoint(
-            filepath=str(run_dir / "digit_classifier_epoch_{epoch:02d}.h5"),
-            save_best_only=False,  # Save every epoch, not just best
-            save_weights_only=False,  # Save full model
-            verbose=0  # Don't print save messages (already verbose=1 in fit)
-        )
-        
-        print(f"Epoch models will be saved as: {run_dir}/digit_classifier_epoch_XX.h5 (one per epoch)")
-        
-        model.fit(
-            train_datagen.flow(x_train, y_train, batch_size=64),
-            steps_per_epoch=len(x_train) // 64,
-            epochs=30,
-            validation_data=(x_test, y_test),
-            verbose=1,
-            callbacks=[stats_callback, checkpoint_callback]
-        )
-        
-        # Print final augmentation statistics
-        print("\n" + "="*60)
-        print("Final Augmentation Statistics:")
-        print("="*60)
-        stats = train_datagen.stats
-        total = stats['total_samples']
-        if total > 0:
-            print(f"Total samples processed across all epochs: {total}")
-            print(f"Average samples per epoch: {total / num_epochs:.0f}")
-            print(f"\nMorphology augmentation application rates:")
-            print(f"  Morphology - Thicker strokes: {stats['morphology_thicker']}/{total} ({stats['morphology_thicker']/total*100:.1f}%)")
-            print(f"  Morphology - Thinner strokes: {stats['morphology_thinner']}/{total} ({stats['morphology_thinner']/total*100:.1f}%)")
-            print(f"\nNote: All augmentations (ShiftScaleRotate, GaussianBlur, GaussNoise, Morphology)")
-            print(f"      can apply to the same image simultaneously based on their individual probabilities.")
-            print(f"      (We can only track morphology stats since it's applied manually)")
-        print("="*60)
+            # Create data generator with augmentation
+            train_datagen = ImageDataGeneratorWithAugmentation(
+                augmentation_pipeline=augmentation_pipeline,
+                batch_size=64
+            )
+            
+            # Train the model with augmented data
+            print("Starting training with data augmentation...")
+            print("\n" + "="*60)
+            print("Augmentation Configuration:")
+            print("="*60)
+            print("All augmentations can apply to the SAME image simultaneously")
+            print("(Based on their individual probabilities)")
+            print("\nAugmentation probabilities:")
+            print("  50% of samples will be augmented, 50% will remain original")
+            print("  Rotation OR Slant (mutually exclusive): 80% (p=0.8) of augmented samples")
+            print("    - Rotation: ±48° rotation (no shift, no scale)")
+            print("    - Slant: ±15° vertical shear (no shift, no scale)")
+            print("  GaussianBlur (image quality): 30% (p=0.3) of augmented samples")
+            print("  GaussNoise (image quality): 20% (p=0.2) of augmented samples")
+            print("  Morphology - Stroke thickness variation: 50% (p=0.5) of augmented samples")
+            print("\nNote: Augmentation is applied on-the-fly - each sample is augmented differently each epoch")
+            print(f"Total augmented samples over {num_epochs} epochs: ~{len(x_train) * num_epochs}")
+            print("(Each sample is augmented uniquely each time it's seen)")
+            print("="*60 + "\n")
+            
+            # Custom callback to print per-epoch statistics
+            class AugmentationStatsCallback(keras.callbacks.Callback):
+                def __init__(self, datagen, samples_per_epoch):
+                    self.datagen = datagen
+                    self.samples_per_epoch = samples_per_epoch
+                    self.last_total = 0
+                
+                def on_epoch_end(self, epoch, logs=None):
+                    current_total = self.datagen.stats['total_samples']
+                    samples_this_epoch = current_total - self.last_total
+                    self.last_total = current_total
+                    print(f"\n[Epoch {epoch+1}] Augmented samples processed: {samples_this_epoch}")
+            
+            stats_callback = AugmentationStatsCallback(train_datagen, len(x_train))
+            
+            # ModelCheckpoint callback to save model after each epoch with epoch number
+            # Save all epoch models in the timestamped run directory
+            checkpoint_callback = keras.callbacks.ModelCheckpoint(
+                filepath=str(run_dir / "digit_classifier_epoch_{epoch:02d}.keras"),
+                save_best_only=False,  # Save every epoch, not just best
+                save_weights_only=False,  # Save full model
+                verbose=0  # Don't print save messages (already verbose=1 in fit)
+            )
+            
+            print(f"Epoch models will be saved as: {run_dir}/digit_classifier_epoch_XX.keras (one per epoch)")
+            
+            model.fit(
+                train_datagen.flow(x_train, y_train, batch_size=64),
+                steps_per_epoch=len(x_train) // 64,
+                epochs=num_epochs,
+                validation_data=(x_test, y_test),
+                verbose=1,
+                callbacks=[stats_callback, checkpoint_callback]
+            )
+            
+            # Print final augmentation statistics
+            print("\n" + "="*60)
+            print("Final Augmentation Statistics:")
+            print("="*60)
+            stats = train_datagen.stats
+            total = stats['total_samples']
+            if total > 0:
+                print(f"Total samples processed across all epochs: {total}")
+                print(f"Average samples per epoch: {total / num_epochs:.0f}")
+                print(f"\nMorphology augmentation application rates:")
+                print(f"  Morphology - Thicker strokes: {stats['morphology_thicker']}/{total} ({stats['morphology_thicker']/total*100:.1f}%)")
+                print(f"  Morphology - Thinner strokes: {stats['morphology_thinner']}/{total} ({stats['morphology_thinner']/total*100:.1f}%)")
+                print(f"\nNote: All augmentations (ShiftScaleRotate, GaussianBlur, GaussNoise, Morphology)")
+                print(f"      can apply to the same image simultaneously based on their individual probabilities.")
+                print(f"      (We can only track morphology stats since it's applied manually)")
+            print("="*60)
+        else:
+            # Train the model without augmentation
+            print("Starting training WITHOUT data augmentation...")
+            print("\n" + "="*60)
+            print("Training Configuration:")
+            print("="*60)
+            print("Training with original data only (no augmentation)")
+            print(f"Training samples per epoch: {len(x_train)}")
+            print(f"Test samples: {len(x_test)}")
+            print("="*60 + "\n")
+            
+            # ModelCheckpoint callback to save model after each epoch with epoch number
+            checkpoint_callback = keras.callbacks.ModelCheckpoint(
+                filepath=str(run_dir / "digit_classifier_epoch_{epoch:02d}.keras"),
+                save_best_only=False,  # Save every epoch, not just best
+                save_weights_only=False,  # Save full model
+                verbose=0  # Don't print save messages (already verbose=1 in fit)
+            )
+            
+            print(f"Epoch models will be saved as: {run_dir}/digit_classifier_epoch_XX.keras (one per epoch)")
+            
+            model.fit(
+                x_train, y_train,
+                batch_size=64,
+                epochs=num_epochs,
+                validation_data=(x_test, y_test),
+                verbose=1,
+                callbacks=[checkpoint_callback]
+            )
         
         # Save the final model (also saved by checkpoint, but this ensures final state is saved)
-        model.save(model_path_to_use)
-        print(f"Final model also saved to: {model_path_to_use}")
+        # If user specified a path, use it; otherwise save to run_dir
+        if classifier_model_path:
+            final_model_path = classifier_model_path
+        else:
+            final_model_path = str(run_dir / "digit_classifier_final.keras")
+        
+        model.save(final_model_path)
+        print(f"Final model saved to: {final_model_path}")
         print(f"(Individual epoch models saved in: {run_dir})")
         
         # Evaluate on test set
@@ -493,26 +604,63 @@ def main():
         "-m", "--model-path",
         type=str,
         default=None,
-        help="Path to save the trained model (.h5 file). Default: ~/.digit_classifier_mnist.h5"
+        help="Path to save the trained model (.keras file). Default: ~/.digit_classifier_mnist.keras"
     )
     parser.add_argument(
         "--force-retrain",
         action="store_true",
         help="Force retraining even if a model already exists"
     )
+    parser.add_argument(
+        "--no-augment",
+        action="store_true",
+        help="Disable data augmentation during training (augmentation is enabled by default)"
+    )
+    parser.add_argument(
+        "--no-mnist",
+        action="store_true",
+        help="Exclude MNIST data from training/validation (MNIST is included by default)"
+    )
+    parser.add_argument(
+        "--no-emnist",
+        action="store_true",
+        help="Exclude EMNIST Digits data from training/validation (EMNIST is included by default)"
+    )
+    parser.add_argument(
+        "--epoch-count",
+        type=int,
+        default=20,
+        help="Number of training epochs (default: 20)"
+    )
+    parser.add_argument(
+        "--no-deep-model",
+        action="store_true",
+        help="Use shallow model architecture instead of deep model (deep model is used by default)"
+    )
     
     args = parser.parse_args()
     
     # If force-retrain, remove existing model first
     if args.force_retrain:
-        model_path = args.model_path if args.model_path else str(Path.home() / ".digit_classifier_mnist.h5")
+        model_path = args.model_path if args.model_path else str(Path.home() / ".digit_classifier_mnist.keras")
         if os.path.exists(model_path):
             print(f"Removing existing model at: {model_path}")
             os.remove(model_path)
     
     # Train the model
     print("Starting digit classifier training...")
-    model = load_or_create_digit_classifier(args.model_path)
+    use_augmentation = not args.no_augment  # Augmentation is default (True unless --no-augment is set)
+    use_mnist = not args.no_mnist  # MNIST is default (True unless --no-mnist is set)
+    use_emnist = not args.no_emnist  # EMNIST is default (True unless --no-emnist is set)
+    use_deep_model = not args.no_deep_model  # Deep model is default (True unless --no-deep-model is set)
+    model = load_or_create_digit_classifier(
+        args.model_path, 
+        use_augmentation=use_augmentation,
+        use_mnist=use_mnist,
+        use_emnist=use_emnist,
+        num_epochs=args.epoch_count,
+        use_deep_model=use_deep_model
+    )
     print("\nTraining complete!")
 
 
