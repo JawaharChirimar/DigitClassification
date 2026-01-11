@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-BoundingBoxFromYolo.py
+DigitsExtractor.py
 
-Processes a JPEG image with handwritten digits using YOLO detection.
+Processes a JPEG image with handwritten digits using contour detection.
 Extracts each detected digit region, normalizes to 28x28 greyscale, and saves
 as individual JPEG files with naming pattern: file_L_D.jpg
 where L = line number (0-indexed), D = digit number (1-indexed).
 
-Output directory: ~/data/BBFY/run_YYYY_MM_DD_HH_MM_SS/
+Output directory: ~/Development/DigitNN/data/BBFY/run_YYYY_MM_DD_HH_MM_SS/
 """
 
 import sys
@@ -17,14 +17,13 @@ from pathlib import Path
 from datetime import datetime
 import cv2
 import numpy as np
-from ultralytics import YOLO
-from DigitClassifier import load_or_create_digit_classifier, classify_digit
+from DigitClassifierNN import load_or_create_digit_classifier, classify_digit
 
 
 def create_output_directory():
     """Create output directory with timestamp in ~/data/BBFY/"""
     home_dir = Path.home()
-    output_base = home_dir / "data" / "BBFY"
+    output_base = home_dir / "Development" / "DigitNN" /"data" / "BBFY"
     output_base.mkdir(parents=True, exist_ok=True)
     
     # Create timestamped directory
@@ -93,12 +92,58 @@ def sort_detections_by_reading_order(detections, image_height, line_threshold=0.
     return result
 
 
+def detect_background_color_contours(image):
+    """
+    Determine background color using contour-based detection.
+    
+    Finds foreground objects (digits) using contours, then samples pixels
+    outside those contours to determine background color.
+    
+    Args:
+        image: Input image (BGR format from cv2)
+    
+    Returns:
+        bool: True if background is white (>127), False if black (<=127)
+    """
+    # Convert to greyscale
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image.copy()
+    
+    # Apply thresholding to find foreground objects (digits)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    
+    # Find contours (foreground objects)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Create mask: foreground = 255, background = 0
+    h, w = gray.shape
+    foreground_mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.drawContours(foreground_mask, contours, -1, 255, -1)  # Fill contours
+    
+    # Background mask = inverse of foreground mask
+    background_mask = 255 - foreground_mask
+    
+    # Sample background pixels from original grayscale image
+    background_pixels = gray[background_mask > 0]
+    
+    if len(background_pixels) == 0:
+        # No background pixels found, fall back to whole image mean
+        mean_val = np.mean(gray)
+        return mean_val > 127
+    
+    # Calculate mean of background pixels
+    background_mean = np.mean(background_pixels)
+    return background_mean
+
+
 def detect_digits_with_contours(image, min_area=50, max_area=None, aspect_ratio_range=(0.2, 3.0)):
     """
-    Detect digit regions using contour detection as a fallback method.
+    Detect digit regions using contour detection.
     
     This method uses OpenCV contour detection to find potential digit regions
-    when YOLO doesn't detect anything (e.g., when using a model not trained on digits).
+    in the input image.
     
     Args:
         image: Input image (BGR format from cv2)
@@ -153,7 +198,7 @@ def detect_digits_with_contours(image, min_area=50, max_area=None, aspect_ratio_
             continue
         
         # Add padding around the bounding box
-        padding = 3
+        padding = 2
         x1 = max(0, x - padding)
         y1 = max(0, y - padding)
         x2 = min(w, x + box_w + padding)
@@ -164,7 +209,8 @@ def detect_digits_with_contours(image, min_area=50, max_area=None, aspect_ratio_
     return detections
 
 
-def extract_and_process_region(image, box, target_size=(28, 28)):
+def extract_and_process_region(image, box, target_size=(28, 28), 
+background_mean=0):
     """
     Extract region from image, resize to target size, and convert to greyscale.
     
@@ -172,11 +218,14 @@ def extract_and_process_region(image, box, target_size=(28, 28)):
         image: Input image (BGR format from cv2)
         box: Bounding box (x1, y1, x2, y2)
         target_size: Target size (width, height)
+        background_mean: mean value of background (determined from full image)
     
     Returns:
-        Processed 28x28 greyscale image
+        Processed 56x56 greyscale image
     """
     x1, y1, x2, y2 = map(int, box)
+
+    print("background_mean: ", background_mean)
     
     # Ensure coordinates are within image bounds
     h, w = image.shape[:2]
@@ -186,41 +235,57 @@ def extract_and_process_region(image, box, target_size=(28, 28)):
     y2 = min(h, y2)
     
     # Extract region
-    region = image[y1:y2, x1:x2]
-    
-    # Convert to greyscale if not already
-    if len(region.shape) == 3:
-        region_gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-    else:
-        region_gray = region
-    
-    # Resize to 20x20 first (digit will be in center)
-    digit_size = (20, 20)
-    region_resized = cv2.resize(region_gray, digit_size, interpolation=cv2.INTER_AREA)
+    digit0 = image[y1:y2, x1:x2]
+
+    target_size = 38
+
+    digit1 = cv2.resize(digit0, (target_size, target_size), interpolation=cv2.INTER_AREA)   
     
     # Light noise reduction - very gentle blur to smooth without losing detail
-    region_cleaned = cv2.bilateralFilter(region_resized, 5, 50, 50)
+    digit2 = cv2.bilateralFilter(digit1, 5, 50, 50)
     
-    # Apply adaptive thresholding for better contrast (less aggressive than Otsu's binary)
-    # This preserves more detail while still cleaning the background
-    region_binary = cv2.adaptiveThreshold(region_cleaned, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                         cv2.THRESH_BINARY, 11, 2)
-    
-    # Very light noise removal - only remove tiny isolated pixels
+
+    digit3 = cv2.adaptiveThreshold(digit2, 255, 
+    cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 5)
+
+    # Very light noise removal - only remove tiny isolated pixels (only for binary)
     kernel = np.ones((1, 1), np.uint8)  # Minimal kernel
-    region_cleaned = cv2.morphologyEx(region_binary, cv2.MORPH_OPEN, kernel, iterations=1)
+    digit4 = cv2.morphologyEx(digit3, cv2.MORPH_OPEN, kernel, iterations=1)
     
-    # Ensure white digits on black background
-    # Check if we need to invert (if background is mostly white, invert to get white digits on black)
-    mean_val = np.mean(region_cleaned)
-    if mean_val > 127:  # If image is mostly white (light background), invert it
-        region_cleaned = 255 - region_cleaned
+    # heigth and width of original bounding box
+    h, w = image[y1:y2, x1:x2].shape[:2]
+    
+    # Calculate scaling factor to fit the larger dimension to target_size
+    scale = target_size / max(h, w)
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    
+    # Resize maintaining aspect ratio
+    digit5 = cv2.resize(digit4, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+    
+    # Add padding to make it square, centering the digit in the target_size
+    pad_h = (target_size - new_h) // 2
+    pad_w = (target_size - new_w) // 2
+    pad_h_remainder = (target_size - new_h) % 2  # Handle odd padding
+    pad_w_remainder = (target_size - new_w) % 2
+    
+    digit6 = cv2.copyMakeBorder(
+        digit5,
+        top=pad_h,
+        bottom=pad_h + pad_h_remainder,
+        left=pad_w,
+        right=pad_w + pad_w_remainder,
+        borderType=cv2.BORDER_CONSTANT,
+        value=background_mean  # Color matches background mean
+    )
+    
+    digit7 = np.where(digit6 > (background_mean - 1), 0, 255).astype(np.uint8)
     
     # Add 4 pixels of solid black padding on all 4 sides to make 28x28
-    # Final size: 20 + 4 + 4 = 28
-    padding = 4
-    region_padded = cv2.copyMakeBorder(
-        region_cleaned,
+    # Final size: 52 + 2 + 2 = 56
+    padding = 2
+    digit8 = cv2.copyMakeBorder(
+        digit7,
         top=padding,
         bottom=padding,
         left=padding,
@@ -229,82 +294,48 @@ def extract_and_process_region(image, box, target_size=(28, 28)):
         value=0  # Black padding
     )
     
-    return region_padded
+    return digit8
 
 
-def process_image(input_path, model_path=None, output_dir=None, classifier_model_path=None, classify_digits=False):
+def process_image(input_path, output_dir=None, 
+classifier_model_path=None, classify_digits=False):
     """
-    Process input image with YOLO, extract digit regions, and save them.
+    Process input image with contour detection, extract digit regions, and save them.
     
     Args:
         input_path: Path to input JPEG file
-        model_path: Path to YOLO model file (optional, uses default if None)
         output_dir: Output directory (created with timestamp if None)
+        classifier_model_path: Path to digit classifier model (optional)
+        classify_digits: Whether to classify digits using CNN
     """
     # Load image
     if not os.path.exists(input_path):
         print(f"Error: Input file not found: {input_path}")
         sys.exit(1)
     
-    image = cv2.imread(input_path)
+    image2 = cv2.imread(input_path)
+    image = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
     if image is None:
         print(f"Error: Could not read image: {input_path}")
         sys.exit(1)
     
     image_height, image_width = image.shape[:2]
     
-    # Load YOLO model
-    try:
-        if model_path and os.path.exists(model_path):
-            model = YOLO(model_path)
-            print(f"Loaded model from: {model_path}")
-        else:
-            # Use default YOLOv8 model (will download automatically on first use)
-            if model_path:
-                print(f"Warning: Model path '{model_path}' not found. Using default YOLOv8n model.")
-            else:
-                print("No model path provided. Using default YOLOv8n model (will download on first use).")
-            print("Note: For best results with handwritten digits, use a trained digit detection model.")
-            model = YOLO('yolov8n.pt')
-    except Exception as e:
-        print(f"Error loading YOLO model: {e}")
-        sys.exit(1)
+    # Detect background color using contour-based detection
+    background_mean = detect_background_color_contours(image)
     
-    # Run inference
-    try:
-        results = model(input_path)
-    except Exception as e:
-        print(f"Error running YOLO inference: {e}")
-        sys.exit(1)
-    
-    # Extract bounding boxes
-    detections = []
-    for result in results:
-        boxes = result.boxes
-        for box in boxes:
-            # Get box coordinates (x1, y1, x2, y2)
-            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-            detections.append((x1, y1, x2, y2))
+    # Detect digits using contour-based detection
+    detections = detect_digits_with_contours(image, min_area=30, 
+    aspect_ratio_range=(0.15, 4.0))
     
     if not detections:
-        print("Warning: No detections found with YOLO model.")
-        print("Note: Default YOLOv8n model is trained on COCO dataset (80 classes like 'person', 'car', etc.)")
-        print("      and does NOT include handwritten digits.")
-        print("\nTrying contour-based detection as fallback method...")
-        
-        # Try contour-based detection as fallback
-        detections = detect_digits_with_contours(image, min_area=30, aspect_ratio_range=(0.15, 4.0))
-        
-        if not detections:
-            print("Error: No digit regions found using contour detection either.")
-            print("Please try:")
-            print("  1. Using a YOLO model trained specifically for digit detection")
-            print("  2. Adjusting image preprocessing (ensure good contrast)")
-            return
-        else:
-            print(f"Found {len(detections)} potential digit regions using contour detection")
+        print("Error: No digit regions found using contour detection.")
+        print("Please try:")
+        print("  1. Adjusting image preprocessing (ensure good contrast)")
+        print("  2. Checking if the image contains visible handwritten digits")
+        return
     else:
-        print(f"Found {len(detections)} detections with YOLO")
+        print(f"Found {len(detections)} potential digit regions using contour detection")
     
     # Sort detections in reading order
     sorted_detections = sort_detections_by_reading_order(detections, image_height)
@@ -322,7 +353,7 @@ def process_image(input_path, model_path=None, output_dir=None, classifier_model
     classifier_model = None
     if classify_digits:
         try:
-            classifier_model = load_or_create_digit_classifier(classifier_model_path)
+            classifier_model = load_or_create_digit_classifier(train_model=False, classifier_model_path=classifier_model_path)
         except Exception as e:
             print(f"Warning: Could not load/create digit classifier: {e}")
             print("Saving regions without classification...")
@@ -331,7 +362,8 @@ def process_image(input_path, model_path=None, output_dir=None, classifier_model
     # Process and save each region
     for line_num, digit_num, box in sorted_detections:
         # Extract and process region
-        processed_region = extract_and_process_region(image, box)
+        processed_region = extract_and_process_region(image, box, 
+        background_mean=background_mean)
         
         # Classify digit if requested
         predicted_digit = None
@@ -363,18 +395,12 @@ def process_image(input_path, model_path=None, output_dir=None, classifier_model
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Extract handwritten digits from JPEG image using YOLO detection"
+        description="Extract handwritten digits from JPEG image using contour detection"
     )
     parser.add_argument(
         "input_image",
         type=str,
         help="Path to input JPEG file with handwritten digits"
-    )
-    parser.add_argument(
-        "-m", "--model",
-        type=str,
-        default=None,
-        help="Path to YOLO model file (optional, uses default YOLOv8n if not provided)"
     )
     parser.add_argument(
         "-o", "--output",
@@ -388,15 +414,19 @@ def main():
         help="Enable digit classification using CNN (requires TensorFlow, will train on MNIST if no model provided)"
     )
     parser.add_argument(
-        "--classifier-model",
+        "-m", "--classifier-model",
         type=str,
         default=None,
-        help="Path to pre-trained digit classifier model (.h5 file). If not provided and -c is used, will train on MNIST"
+        help="Path to pre-trained digit classifier model (.keras file). Required when --classify is used."
     )
     
     args = parser.parse_args()
     
-    process_image(args.input_image, args.model, args.output, args.classifier_model, args.classify)
+    # Validate that classifier-model is provided when classification is enabled
+    if args.classify and args.classifier_model is None:
+        parser.error("--classifier-model is required when --classify is used")
+    
+    process_image(args.input_image, args.output, args.classifier_model, args.classify)
 
 
 if __name__ == "__main__":

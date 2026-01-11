@@ -24,45 +24,45 @@ except ImportError:
     print("Warning: 'emnist' package not available. Install with: pip install emnist")
 
 
-def create_digit_classifier_model(use_emnist=True, use_deep_model=True):
+def create_digit_classifier_model(use_240k_samples=False, use_deep_model=True):
     """
     Create a CNN model for digit classification (0-9).
-    Architecture similar to MNIST classifiers.
     
     Args:
-        use_emnist: Whether EMNIST data will be used (affects model capacity)
+        use_240k_samples: Whether to use 240k samples from EMNIST Digits (affects model capacity)
         use_deep_model: Whether to use deep model architecture (default: True)
     
     Returns:
         Compiled Keras model
     """
+
     # Adjust model capacity based on dataset size
-    if use_emnist:
+    if use_240k_samples:
         # Larger model for MNIST + EMNIST (more training data)
-        conv4 = 64
-        dense1 = 128
+        number_convolution_channels = 64
+        neurons_in_dense_layer = 128
     else:
         # Smaller model for MNIST only
-        conv4 = 32
-        dense1 = 32
+        number_convolution_channels = 32
+        neurons_in_dense_layer = 32
         
     if use_deep_model:
         model = keras.Sequential([
             layers.Input(shape=(28, 28, 1)),
-            layers.Conv2D(conv4, (3, 3), activation='elu'),
+            layers.Conv2D(number_convolution_channels, (3, 3), activation='elu'),
             layers.BatchNormalization(),
-            layers.Conv2D(conv4, (3, 3), activation='elu'),
+            layers.Conv2D(number_convolution_channels, (3, 3), activation='elu'),
             layers.BatchNormalization(),
             layers.MaxPooling2D((2, 2)),
             layers.Dropout(0.25),
-            layers.Conv2D(conv4, (3, 3), activation='elu'),
+            layers.Conv2D(number_convolution_channels, (3, 3), activation='elu'),
             layers.BatchNormalization(),
-            layers.Conv2D(conv4, (3, 3), activation='elu'),
+            layers.Conv2D(number_convolution_channels, (3, 3), activation='elu'),
             layers.BatchNormalization(),
             layers.MaxPooling2D((2, 2)),
             layers.Dropout(0.25),
             layers.Flatten(),
-            layers.Dense(dense1, activation='elu'),
+            layers.Dense(neurons_in_dense_layer, activation='elu'),
             layers.BatchNormalization(),
             layers.Dropout(0.5),
             layers.Dense(10, activation='softmax')  # 10 classes for digits 0-9
@@ -71,16 +71,16 @@ def create_digit_classifier_model(use_emnist=True, use_deep_model=True):
         # Shallow model architecture (fewer layers)
         model = keras.Sequential([
             layers.Input(shape=(28, 28, 1)),
-            layers.Conv2D(conv4, (3, 3), activation='elu'),
+            layers.Conv2D(number_convolution_channels, (3, 3), activation='elu'),
             layers.BatchNormalization(),
             layers.MaxPooling2D((2, 2)),
             layers.Dropout(0.25),
-            layers.Conv2D(conv4, (3, 3), activation='elu'),
+            layers.Conv2D(number_convolution_channels, (3, 3), activation='elu'),
             layers.BatchNormalization(),
             layers.MaxPooling2D((2, 2)),
             layers.Dropout(0.25),
             layers.Flatten(),
-            layers.Dense(dense1, activation='elu'),
+            layers.Dense(neurons_in_dense_layer, activation='elu'),
             layers.BatchNormalization(),
             layers.Dropout(0.5),
             layers.Dense(10, activation='softmax')  # 10 classes for digits 0-9
@@ -97,8 +97,11 @@ def create_digit_classifier_model(use_emnist=True, use_deep_model=True):
 
 def create_augmentation_pipeline(stats_tracker=None):
     """
-    Create an albumentations augmentation pipeline for digit training.
-    Includes rotation, stroke thickness variation, missing parts, and curved strokes.
+    Create an albumentations augmentation pipeline for MNIST/EMNIST digit training.
+    Includes rotation/slant, image quality issues (blur, noise), and stroke thickness variation.
+    
+    Note: For MNIST/EMNIST, we do NOT use scale or position/translation transforms
+    since digits are already centered and normalized in 28x28 images.
     
     Args:
         stats_tracker: Optional dict to track augmentation statistics
@@ -109,24 +112,24 @@ def create_augmentation_pipeline(stats_tracker=None):
     # Create individual transforms - all can apply together for realistic combinations
     transforms = []
     
-    # 1. Rotation OR Slant (mutually exclusive) - both include scale and position
-    # Rotation: rotates entire digit (like tilting paper) + scale + position
-    # Slant: vertical shear for forward/backward tilt + scale + position
+    # 1. Rotation OR Slant (mutually exclusive) - no shift, no scale
+    # Rotation: rotates entire digit (like tilting paper)
+    # Slant: vertical shear for forward/backward tilt
     # These are mutually exclusive since they both affect orientation
+    # Note: For MNIST/EMNIST, we do NOT apply scale or position/translation transforms
+    #       since digits are already centered and normalized in 28x28 images.
+    #       Affine transform defaults to no scale/translate when not specified.
     transforms.append(A.OneOf([
-        A.ShiftScaleRotate(
-            shift_limit=0.0,      # No shift
-            scale_limit=0.0,      # No scale variation
-            rotate_limit=48,       # 48 degrees max rotation
+        A.Affine(
+            rotate_limit=48,      # 48 degrees max rotation (no scale, no translate)
             p=1.0
         ),
         A.Affine(
             shear={'x': 0, 'y': (-15, 15)},  # Vertical shear for forward/backward tilt (±15 degrees)
-            scale=(1, 1),                # No scale variation
-            translate_percent={'x': (0, 0), 'y': (0, 0)},  # No position shift
+            # No scale or translate parameters - defaults to no scaling/translation
             p=1.0
         )
-    ], p=0.8))  # 80% chance of getting either rotation OR slant (both with scale + position)
+    ], p=0.8))  # 80% chance of getting either rotation OR slant
     
     # 2. Image quality issues - can occur together (realistic for poor scans/photos)
     transforms.append(A.GaussianBlur(blur_limit=(1, 3), p=0.3))  # Light blur
@@ -142,7 +145,7 @@ def create_augmentation_pipeline(stats_tracker=None):
 
 class ImageDataGeneratorWithAugmentation:
     """
-    Custom data generator that applies albumentations augmentations to MNIST data.
+    Custom data generator that applies albumentations augmentations to data.
     """
     def __init__(self, augmentation_pipeline, batch_size=64):
         self.augmentation_pipeline = augmentation_pipeline
@@ -150,6 +153,8 @@ class ImageDataGeneratorWithAugmentation:
         # Statistics tracking
         self.stats = {
             'total_samples': 0,
+            'augmented_samples': 0,
+            'original_samples': 0,
             'morphology_thicker': 0,
             'morphology_thinner': 0,
         }
@@ -190,6 +195,7 @@ class ImageDataGeneratorWithAugmentation:
                         # Apply augmentation (albumentations expects dict with 'image' key)
                         # Note: All augmentations can apply to the same image simultaneously
                         # based on their individual probabilities
+                        self.stats['augmented_samples'] += 1
                         augmented = self.augmentation_pipeline(image=img_uint8)
                         img_aug = augmented['image']
                         
@@ -211,6 +217,7 @@ class ImageDataGeneratorWithAugmentation:
                                 #img_aug = cv2.erode(img_aug, kernel, iterations=1)
                     else:
                         # Keep original image (no augmentation) - 50% of samples remain original
+                        self.stats['original_samples'] += 1
                         img_aug = img_uint8
                     
                     # Convert back to float [0,1]
@@ -229,7 +236,146 @@ class ImageDataGeneratorWithAugmentation:
                 yield batch_x_aug, batch_y
 
 
-def load_or_create_digit_classifier(classifier_model_path=None, use_augmentation=True, use_mnist=True, use_emnist=True, num_epochs=20, use_deep_model=True):
+class AugmentationStatsCallback(keras.callbacks.Callback):
+    """
+    Custom callback to print per-epoch augmentation statistics.
+    Tracks how many samples were augmented vs original each epoch.
+    """
+    def __init__(self, datagen, samples_per_epoch):
+        self.datagen = datagen
+        self.samples_per_epoch = samples_per_epoch
+        self.last_total = 0
+        self.last_augmented = 0
+        self.last_original = 0
+    
+    def on_epoch_end(self, epoch, logs=None):
+        stats = self.datagen.stats
+        current_total = stats['total_samples']
+        current_augmented = stats['augmented_samples']
+        current_original = stats['original_samples']
+        
+        samples_this_epoch = current_total - self.last_total
+        augmented_this_epoch = current_augmented - self.last_augmented
+        original_this_epoch = current_original - self.last_original
+        
+        self.last_total = current_total
+        self.last_augmented = current_augmented
+        self.last_original = current_original
+        
+        print(f"\n[Epoch {epoch+1}] Samples processed: {samples_this_epoch} (Augmented: {augmented_this_epoch}, Original: {original_this_epoch})")
+
+
+def load_and_combine_datasets(use_mnist=True, use_emnist=True):
+    """
+    Load and combine MNIST and/or EMNIST datasets.
+    
+    Args:
+        use_mnist: Whether to load MNIST dataset (default: True)
+        use_emnist: Whether to load EMNIST Digits dataset (default: True)
+    
+    Returns:
+        Tuple of (x_train, y_train, x_test, y_test) as numpy arrays
+        Arrays are normalized to [0, 1] and reshaped to (samples, 28, 28, 1)
+    
+    Raises:
+        ValueError: If no datasets could be loaded
+    """
+    # Load MNIST if requested
+    x_train_mnist = None
+    y_train_mnist = None
+    x_test_mnist = None
+    y_test_mnist = None
+    
+    if use_mnist:
+        print("Loading MNIST dataset...")
+        (x_train_mnist, y_train_mnist), (x_test_mnist, y_test_mnist) = keras.datasets.mnist.load_data()
+        print(f"Loaded MNIST: {len(x_train_mnist)} training, {len(x_test_mnist)} test samples")
+    else:
+        print("Skipping MNIST dataset (use_mnist=False)")
+    
+    # Load EMNIST Digits if requested and available
+    x_train_emnist = None
+    y_train_emnist = None
+    x_test_emnist = None
+    y_test_emnist = None
+    
+    if use_emnist and EMNIST_AVAILABLE:
+        try:
+            print("Loading EMNIST Digits dataset...")
+            # Note: 'digits' parameter loads ONLY EMNIST Digits (0-9), not the full EMNIST dataset
+            # This gives us ~240,000 additional digit samples beyond MNIST's 60,000
+            x_train_emnist, y_train_emnist = extract_training_samples('digits')
+            x_test_emnist, y_test_emnist = extract_test_samples('digits')
+            print(f"Loaded EMNIST Digits: {len(x_train_emnist)} training, {len(x_test_emnist)} test samples")
+            if len(x_train_emnist) == 0:
+                print("Warning: EMNIST Digits loaded but has 0 samples. Check dataset installation.")
+                x_train_emnist = None
+        except Exception as e:
+            print(f"Error: Could not load EMNIST Digits: {e}")
+            import traceback
+            traceback.print_exc()
+            x_train_emnist = None
+            y_train_emnist = None
+            x_test_emnist = None
+            y_test_emnist = None
+    elif use_emnist and not EMNIST_AVAILABLE:
+        print("Skipping EMNIST dataset (EMNIST package not available. Install with: pip install emnist)")
+    elif not use_emnist:
+        print("Skipping EMNIST dataset (use_emnist=False)")
+    
+    # Combine datasets based on what's available
+    datasets_to_combine = []
+    dataset_names = []
+    
+    if x_train_mnist is not None:
+        datasets_to_combine.append((x_train_mnist, y_train_mnist, x_test_mnist, y_test_mnist))
+        dataset_names.append(f"MNIST ({len(x_train_mnist)} samples)")
+    
+    if x_train_emnist is not None:
+        datasets_to_combine.append((x_train_emnist, y_train_emnist, x_test_emnist, y_test_emnist))
+        dataset_names.append(f"EMNIST Digits ({len(x_train_emnist)} samples)")
+    
+    # Check if we have at least one dataset
+    if len(datasets_to_combine) == 0:
+        error_msg = "No training data available! "
+        if not use_mnist and not use_emnist:
+            error_msg += "Both MNIST and EMNIST are disabled."
+        elif not use_mnist:
+            error_msg += "MNIST is disabled (use_mnist=False) and EMNIST is not available or failed to load."
+        elif not use_emnist:
+            error_msg += "EMNIST is disabled (use_emnist=False) and MNIST failed to load."
+        else:
+            error_msg += "Both datasets failed to load."
+        raise ValueError(error_msg)
+    
+    # Combine all available datasets
+    if len(datasets_to_combine) == 1:
+        x_train, y_train, x_test, y_test = datasets_to_combine[0]
+        print(f"Using {dataset_names[0]}: {len(x_train)} training, {len(x_test)} test samples")
+    else:
+        # Combine multiple datasets
+        print(f"Combining datasets: {' + '.join(dataset_names)}")
+        x_train = np.concatenate([ds[0] for ds in datasets_to_combine], axis=0)
+        y_train = np.concatenate([ds[1] for ds in datasets_to_combine], axis=0)
+        x_test = np.concatenate([ds[2] for ds in datasets_to_combine], axis=0)
+        y_test = np.concatenate([ds[3] for ds in datasets_to_combine], axis=0)
+        print(f"Combined dataset: {len(x_train)} training, {len(x_test)} test samples")
+    
+    # Normalize pixel values to [0, 1]
+    x_train = x_train.astype('float32') / 255.0
+    x_test = x_test.astype('float32') / 255.0
+    
+    # Reshape for CNN (28, 28, 1)
+    x_train = x_train.reshape(x_train.shape[0], 28, 28, 1)
+    x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
+    
+    return x_train, y_train, x_test, y_test
+
+
+def load_or_create_digit_classifier(classifier_model_path=None, 
+train_model=True,
+use_augmentation=True, use_mnist=True, use_emnist=True, 
+num_epochs=20, use_deep_model=True):
     """
     Load a pre-trained digit classifier or create/train a new one.
     
@@ -244,27 +390,23 @@ def load_or_create_digit_classifier(classifier_model_path=None, use_augmentation
     Returns:
         Trained Keras model for digit classification
     """
-    # Determine the model path to use
-    if classifier_model_path:
-        model_path_to_use = classifier_model_path
-    else:
-        # Default: save to home directory
-        model_path_to_use = str(Path.home() / ".digit_classifier_mnist.keras")
-    
-    # Try to load existing model (either specified path or default location)
-    if os.path.exists(model_path_to_use):
+
+    print("===========train_model: ", train_model)
+    print("===========classifier_model_path: ", classifier_model_path)
+    # Try to load existing model (from specified path only if train_model is False)
+    if (not train_model) and os.path.exists(classifier_model_path):
         try:
-            print(f"Loading digit classifier from: {model_path_to_use}")
-            model = keras.models.load_model(model_path_to_use)
+            print(f"Loading digit classifier from: {classifier_model_path}")
+            model = keras.models.load_model(classifier_model_path)
             print("Digit classifier loaded successfully")
             return model
         except Exception as e:
-            print(f"Warning: Could not load classifier from {model_path_to_use}: {e}")
+            print(f"Warning: Could not load classifier from {classifier_model_path}: {e}")
             print("Creating new classifier model...")
     
     # We're going to train a new model, so create the run directory now
     # Create timestamped directory for model checkpoints
-    base_dir = Path.home() / "data" / "modelForBBFY"
+    base_dir = Path.home() / "Development" / "DigitNN" / "data" / "modelForBBFY"
     base_dir.mkdir(parents=True, exist_ok=True)
     
     # Create timestamped run directory: run_YYYY_MM_DD_HH_MM_SS
@@ -276,124 +418,13 @@ def load_or_create_digit_classifier(classifier_model_path=None, use_augmentation
     
     # Create new model
     print("Creating new digit classifier model...")
-    model = create_digit_classifier_model(use_emnist=use_emnist, use_deep_model=use_deep_model)
+    model = create_digit_classifier_model(use_240k_samples=use_emnist, 
+    use_deep_model=use_deep_model)
     
     # Try to train on MNIST + EMNIST Digits dataset
     try:
-        # Load MNIST if requested
-        x_train_mnist = None
-        y_train_mnist = None
-        x_test_mnist = None
-        y_test_mnist = None
-        
-        if use_mnist:
-            print("Loading MNIST dataset...")
-            (x_train_mnist, y_train_mnist), (x_test_mnist, y_test_mnist) = keras.datasets.mnist.load_data()
-            print(f"Loaded MNIST: {len(x_train_mnist)} training, {len(x_test_mnist)} test samples")
-        else:
-            print("Skipping MNIST dataset (use_mnist=False)")
-        
-        # Load EMNIST Digits if requested and available
-        x_train_emnist = None
-        y_train_emnist = None
-        x_test_emnist = None
-        y_test_emnist = None
-        
-        if use_emnist and EMNIST_AVAILABLE:
-            x_train_emnist = None
-            max_retries = 2
-            for attempt in range(max_retries):
-                try:
-                    if attempt == 0:
-                        print("Loading EMNIST Digits dataset (this may take a few minutes on first run)...")
-                    else:
-                        print(f"Retrying EMNIST Digits loading (attempt {attempt + 1}/{max_retries})...")
-                    # Note: 'digits' parameter loads ONLY EMNIST Digits (0-9), not the full EMNIST dataset
-                    # This gives us ~240,000 additional digit samples beyond MNIST's 60,000
-                    x_train_emnist, y_train_emnist = extract_training_samples('digits')
-                    x_test_emnist, y_test_emnist = extract_test_samples('digits')
-                    print(f"Loaded EMNIST Digits: {len(x_train_emnist)} training, {len(x_test_emnist)} test samples")
-                    if len(x_train_emnist) == 0:
-                        print("Warning: EMNIST Digits loaded but has 0 samples. Check dataset installation.")
-                        x_train_emnist = None
-                    break  # Success, exit retry loop
-                except Exception as e:
-                    error_msg = str(e)
-                    # Check if it's a corrupted zip file error
-                    if ("not a zip file" in error_msg.lower() or "BadZipFile" in error_msg) and attempt < max_retries - 1:
-                        print(f"Warning: EMNIST cache file is corrupted: {e}")
-                        print("Attempting to clear corrupted cache file and retry...")
-                        try:
-                            cache_dir = os.path.join(os.path.expanduser('~'), '.cache', 'emnist')
-                            cache_file = os.path.join(cache_dir, 'emnist.zip')
-                            if os.path.exists(cache_file):
-                                os.remove(cache_file)
-                                print(f"Deleted corrupted cache file: {cache_file}")
-                                print("Will retry downloading EMNIST...")
-                            else:
-                                print(f"Cache file not found at: {cache_file}")
-                        except Exception as cleanup_error:
-                            print(f"Could not delete cache file automatically: {cleanup_error}")
-                            print(f"Please manually delete: {os.path.join(os.path.expanduser('~'), '.cache', 'emnist', 'emnist.zip')}")
-                    else:
-                        # Not a corrupted file error, or we've exhausted retries
-                        print(f"Warning: Could not load EMNIST Digits: {e}")
-                        if attempt == max_retries - 1:
-                            import traceback
-                            print("Full error traceback:")
-                            traceback.print_exc()
-                        x_train_emnist = None
-                        break  # Give up after showing error
-        elif use_emnist and not EMNIST_AVAILABLE:
-            print("Skipping EMNIST dataset (EMNIST package not available. Install with: pip install emnist)")
-        elif not use_emnist:
-            print("Skipping EMNIST dataset (use_emnist=False)")
-        
-        # Combine datasets based on what's available
-        datasets_to_combine = []
-        dataset_names = []
-        
-        if x_train_mnist is not None:
-            datasets_to_combine.append((x_train_mnist, y_train_mnist, x_test_mnist, y_test_mnist))
-            dataset_names.append(f"MNIST ({len(x_train_mnist)} samples)")
-        
-        if x_train_emnist is not None:
-            datasets_to_combine.append((x_train_emnist, y_train_emnist, x_test_emnist, y_test_emnist))
-            dataset_names.append(f"EMNIST Digits ({len(x_train_emnist)} samples)")
-        
-        # Check if we have at least one dataset
-        if len(datasets_to_combine) == 0:
-            error_msg = "No training data available! "
-            if not use_mnist and not use_emnist:
-                error_msg += "Both MNIST and EMNIST are disabled."
-            elif not use_mnist:
-                error_msg += "MNIST is disabled (use_mnist=False) and EMNIST is not available or failed to load."
-            elif not use_emnist:
-                error_msg += "EMNIST is disabled (use_emnist=False) and MNIST failed to load."
-            else:
-                error_msg += "Both datasets failed to load."
-            raise ValueError(error_msg)
-        
-        # Combine all available datasets
-        if len(datasets_to_combine) == 1:
-            x_train, y_train, x_test, y_test = datasets_to_combine[0]
-            print(f"Using {dataset_names[0]}: {len(x_train)} training, {len(x_test)} test samples")
-        else:
-            # Combine multiple datasets
-            print(f"Combining datasets: {' + '.join(dataset_names)}")
-            x_train = np.concatenate([ds[0] for ds in datasets_to_combine], axis=0)
-            y_train = np.concatenate([ds[1] for ds in datasets_to_combine], axis=0)
-            x_test = np.concatenate([ds[2] for ds in datasets_to_combine], axis=0)
-            y_test = np.concatenate([ds[3] for ds in datasets_to_combine], axis=0)
-            print(f"Combined dataset: {len(x_train)} training, {len(x_test)} test samples")
-        
-        # Normalize pixel values to [0, 1]
-        x_train = x_train.astype('float32') / 255.0
-        x_test = x_test.astype('float32') / 255.0
-        
-        # Reshape for CNN (28, 28, 1)
-        x_train = x_train.reshape(x_train.shape[0], 28, 28, 1)
-        x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
+        # Load and combine datasets
+        x_train, y_train, x_test, y_test = load_and_combine_datasets(use_mnist=use_mnist, use_emnist=use_emnist)
         
         print(f"Training samples per epoch: {len(x_train)}")
         print(f"Test samples: {len(x_test)}")
@@ -428,22 +459,10 @@ def load_or_create_digit_classifier(classifier_model_path=None, use_augmentation
             print("  GaussNoise (image quality): 20% (p=0.2) of augmented samples")
             print("  Morphology - Stroke thickness variation: 50% (p=0.5) of augmented samples")
             print("\nNote: Augmentation is applied on-the-fly - each sample is augmented differently each epoch")
-            print(f"Total augmented samples over {num_epochs} epochs: ~{len(x_train) * num_epochs}")
+            print(f"Total samples processed over {num_epochs} epochs: ~{len(x_train) * num_epochs}")
+            print(f"(~{int(len(x_train) * num_epochs * 0.5)} augmented, ~{int(len(x_train) * num_epochs * 0.5)} original)")
             print("(Each sample is augmented uniquely each time it's seen)")
             print("="*60 + "\n")
-            
-            # Custom callback to print per-epoch statistics
-            class AugmentationStatsCallback(keras.callbacks.Callback):
-                def __init__(self, datagen, samples_per_epoch):
-                    self.datagen = datagen
-                    self.samples_per_epoch = samples_per_epoch
-                    self.last_total = 0
-                
-                def on_epoch_end(self, epoch, logs=None):
-                    current_total = self.datagen.stats['total_samples']
-                    samples_this_epoch = current_total - self.last_total
-                    self.last_total = current_total
-                    print(f"\n[Epoch {epoch+1}] Augmented samples processed: {samples_this_epoch}")
             
             stats_callback = AugmentationStatsCallback(train_datagen, len(x_train))
             
@@ -476,12 +495,16 @@ def load_or_create_digit_classifier(classifier_model_path=None, use_augmentation
             if total > 0:
                 print(f"Total samples processed across all epochs: {total}")
                 print(f"Average samples per epoch: {total / num_epochs:.0f}")
-                print(f"\nMorphology augmentation application rates:")
-                print(f"  Morphology - Thicker strokes: {stats['morphology_thicker']}/{total} ({stats['morphology_thicker']/total*100:.1f}%)")
-                print(f"  Morphology - Thinner strokes: {stats['morphology_thinner']}/{total} ({stats['morphology_thinner']/total*100:.1f}%)")
-                print(f"\nNote: All augmentations (ShiftScaleRotate, GaussianBlur, GaussNoise, Morphology)")
+                print(f"\nAugmentation breakdown:")
+                print(f"  Augmented samples: {stats['augmented_samples']}/{total} ({stats['augmented_samples']/total*100:.1f}%)")
+                print(f"  Original samples: {stats['original_samples']}/{total} ({stats['original_samples']/total*100:.1f}%)")
+                print(f"\nMorphology augmentation application rates (within augmented samples):")
+                if stats['augmented_samples'] > 0:
+                    print(f"  Morphology - Thicker strokes: {stats['morphology_thicker']}/{stats['augmented_samples']} ({stats['morphology_thicker']/stats['augmented_samples']*100:.1f}% of augmented)")
+                    print(f"  Morphology - Thinner strokes: {stats['morphology_thinner']}/{stats['augmented_samples']} ({stats['morphology_thinner']/stats['augmented_samples']*100:.1f}% of augmented)")
+                print(f"\nNote: All augmentations (Rotation/Slant, GaussianBlur, GaussNoise, Morphology)")
                 print(f"      can apply to the same image simultaneously based on their individual probabilities.")
-                print(f"      (We can only track morphology stats since it's applied manually)")
+                print(f"      (Morphology stats are tracked manually; other augmentations are handled by albumentations)")
             print("="*60)
         else:
             # Train the model without augmentation
@@ -514,11 +537,8 @@ def load_or_create_digit_classifier(classifier_model_path=None, use_augmentation
             )
         
         # Save the final model (also saved by checkpoint, but this ensures final state is saved)
-        # If user specified a path, use it; otherwise save to run_dir
-        if classifier_model_path:
-            final_model_path = classifier_model_path
-        else:
-            final_model_path = str(run_dir / "digit_classifier_final.keras")
+        # Save to run_dir
+        final_model_path = str(run_dir / "digit_classifier_final.keras")
         
         model.save(final_model_path)
         print(f"Final model saved to: {final_model_path}")
@@ -526,11 +546,12 @@ def load_or_create_digit_classifier(classifier_model_path=None, use_augmentation
         
         # Evaluate on test set
         print("\n" + "="*60)
-        print("Evaluating model on test set (MNIST + EMNIST Digits)...")
+        print("Evaluating model on test set...")
         print("="*60)
         test_loss, test_accuracy = model.evaluate(x_test, y_test, verbose=0)
+        num_test_samples = len(x_test)
         print(f"\nTest Loss: {test_loss:.4f}")
-        print(f"Test Accuracy: {test_accuracy:.4%} ({test_accuracy*10000:.0f} out of 10,000 test images)")
+        print(f"Test Accuracy: {test_accuracy:.4%} ({test_accuracy*num_test_samples:.0f} out of {num_test_samples} test images)")
         
         # Get per-class accuracy
         y_pred = model.predict(x_test, verbose=0)
@@ -551,7 +572,7 @@ def load_or_create_digit_classifier(classifier_model_path=None, use_augmentation
         return model
         
     except Exception as e:
-        print(f"Warning: Could not train on MNIST dataset: {e}")
+        print(f"Warning: Could not train digit classifier: {e}")
         print("Using untrained model (predictions will be random)")
         return model
 
@@ -593,7 +614,6 @@ def classify_digit(classifier_model, digit_image):
 def main():
     """
     Standalone training function for the digit classifier.
-    Can be run directly to train the model without running BoundingBoxFromYolo.
     """
     import argparse
     
@@ -607,9 +627,9 @@ def main():
         help="Path to save the trained model (.keras file). Default: ~/.digit_classifier_mnist.keras"
     )
     parser.add_argument(
-        "--force-retrain",
+        "--train-model",
         action="store_true",
-        help="Force retraining even if a model already exists"
+        help="True means train model, False means load model"
     )
     parser.add_argument(
         "--no-augment",
@@ -639,14 +659,7 @@ def main():
     )
     
     args = parser.parse_args()
-    
-    # If force-retrain, remove existing model first
-    if args.force_retrain:
-        model_path = args.model_path if args.model_path else str(Path.home() / ".digit_classifier_mnist.keras")
-        if os.path.exists(model_path):
-            print(f"Removing existing model at: {model_path}")
-            os.remove(model_path)
-    
+        
     # Train the model
     print("Starting digit classifier training...")
     use_augmentation = not args.no_augment  # Augmentation is default (True unless --no-augment is set)
@@ -655,6 +668,7 @@ def main():
     use_deep_model = not args.no_deep_model  # Deep model is default (True unless --no-deep-model is set)
     model = load_or_create_digit_classifier(
         args.model_path, 
+        args.train_model,
         use_augmentation=use_augmentation,
         use_mnist=use_mnist,
         use_emnist=use_emnist,
